@@ -1,0 +1,6 @@
+
+# local / vendored / build junk
+third_party/openpi/third_party/
+third_party/openpi/core/
+third_party/openpi/.venv/
+**/__pycache__/
