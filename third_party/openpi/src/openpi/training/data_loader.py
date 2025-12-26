@@ -14,6 +14,7 @@ import torch
 import openpi.models.model as _model
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
+from openpi.training.lohrbench_rlds_dataset import LohrbenchRldsDataset
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
@@ -77,6 +78,9 @@ class IterableTransformedDataset(IterableDataset[T_co]):
     def __iter__(self):
         for sample in self._dataset:
             if self._is_batched:
+                # Extract prompts before splitting (they're already a list, not arrays)
+                prompts = sample.pop("prompt", None)
+                
                 # Transforms are designed to be applied to individual samples. So we need to split the batch into
                 # individual samples and apply the transform to each sample individually.
                 batch_size = next(v.shape[0] for v in sample.values())
@@ -84,11 +88,25 @@ class IterableTransformedDataset(IterableDataset[T_co]):
                 # Split batch into individual samples using tree_map
                 individual_samples = [jax.tree.map(lambda x: x[i], sample) for i in range(batch_size)]  # noqa: B023
 
+                # Add prompt back to each sample
+                if prompts is not None:
+                    for i, s in enumerate(individual_samples):
+                        s["prompt"] = prompts[i]
+
                 # Transform each sample
                 transformed = [self._transform(s) for s in individual_samples]
 
-                # Recombine batch with tree_map
-                yield jax.tree.map(lambda *x: np.stack(x, axis=0), *transformed)
+                # Extract prompts again after transform (in case transform modified them)
+                transformed_prompts = [t.pop("prompt", None) for t in transformed]
+
+                # Recombine batch with tree_map (without prompts)
+                combined = jax.tree.map(lambda *x: np.stack(x, axis=0), *transformed)
+                
+                # Add prompts back as a list
+                if any(p is not None for p in transformed_prompts):
+                    combined["prompt"] = transformed_prompts
+                
+                yield combined
             else:
                 yield self._transform(sample)
 
@@ -159,6 +177,14 @@ def create_rlds_dataset(
     shuffle: bool = False,
 ) -> Dataset:
     # At the moment, we only support DROID for RLDS datasets.
+    if data_config.repo_id == "lohrbench_rlds" or any(d.name.startswith("lohrbench") for d in data_config.datasets):
+        return LohrbenchRldsDataset(
+            data_dir=data_config.rlds_data_dir,
+            batch_size=batch_size,
+            datasets=data_config.datasets,
+            shuffle=shuffle,
+            action_chunk_size=action_horizon,
+        )
     return DroidRldsDataset(
         data_dir=data_config.rlds_data_dir,
         batch_size=batch_size,
@@ -522,9 +548,23 @@ class RLDSDataLoader:
                 try:
                     batch = next(data_iter)
                 except StopIteration:
-                    break  # We've exhausted the dataset. Create a new iterator and start over.
+                    break
                 num_items += 1
-                yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                
+                # Extract prompts BEFORE sharding
+                prompts = batch.pop("prompt", None)
+                
+                # Shard numeric data only
+                sharded_batch = jax.tree.map(
+                    lambda x: jax.make_array_from_process_local_data(self._sharding, x), 
+                    batch
+                )
+                
+                # Add prompts back
+                if prompts is not None:
+                    sharded_batch["prompt"] = prompts
+                    
+                yield sharded_batch
 
 
 class DataLoaderImpl(DataLoader):

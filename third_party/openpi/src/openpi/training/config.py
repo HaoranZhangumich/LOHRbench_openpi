@@ -28,6 +28,9 @@ import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
+import openpi.policies.lohrbench_policy as lohrbench_policy
+import openpi.training.lohrbench_rlds_dataset as lohrbench_rlds_dataset
+
 
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
@@ -95,7 +98,7 @@ class DataConfig:
     # Action space for DROID dataset.
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # List of datasets to sample from: name, version, weight, and optionally filter_dict_path
-    datasets: Sequence[droid_rlds_dataset.RLDSDataset] = ()
+    datasets: Sequence[Any] = ()
 
 
 class GroupFactory(Protocol):
@@ -419,6 +422,50 @@ class RLDSDroidDataConfig(DataConfigFactory):
             model_transforms=model_transforms,
             rlds_data_dir=self.rlds_data_dir,
             action_space=self.action_space,
+            datasets=self.datasets,
+        )
+    
+
+@dataclasses.dataclass(frozen=True)
+class RLDSLohrbenchDataConfig(DataConfigFactory):
+    rlds_data_dir: str | None = None
+
+    datasets: Sequence[lohrbench_rlds_dataset.RLDSDataset] = (
+        lohrbench_rlds_dataset.RLDSDataset(
+            name="lohrbench_rlds",
+            version="0.1.0",
+            weight=1.0,
+        ),
+    )
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # For RLDS, your dataset loader already emits OpenPI-style keys,
+        # so repack can be empty (or keep it empty to avoid conflicts).
+        repack_transform = _transforms.Group()
+
+        data_transforms = _transforms.Group(
+            inputs=[lohrbench_policy.LohrbenchInputs(model_type=model_config.model_type)],
+            outputs=[lohrbench_policy.LohrbenchOutputs()],
+        )
+
+        # Only keep this if your dataset actions are ABSOLUTE and policy expects delta
+        delta_action_mask = _transforms.make_bool_mask(7, -1)
+        data_transforms = data_transforms.push(
+            inputs=[_transforms.DeltaActions(delta_action_mask)],
+            outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+        )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        assert self.rlds_data_dir is not None, "Need to set rlds_data_dir for RLDS data loader."
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            rlds_data_dir=self.rlds_data_dir,
             datasets=self.datasets,
         )
 
@@ -968,6 +1015,51 @@ _CONFIGS = [
     # RoboArena & PolaRiS configs.
     *roboarena_config.get_roboarena_configs(),
     *polaris_config.get_polaris_configs(),
+    TrainConfig(
+        name="pi0_lohrbench_rlds_finetune",
+        model=pi0_fast.Pi0FASTConfig(
+            action_dim=8,
+            action_horizon=16,
+            # keep max_token_len consistent with other pi0_fast configs unless you know you need bigger
+            max_token_len=180,
+            paligemma_variant="gemma_2b_lora",   # <-- LoRA
+        ),
+        data=RLDSLohrbenchDataConfig(
+            repo_id="lohrbench_rlds",
+            rlds_data_dir="/home/haoran-zhang/data/Lohrbench_rlds/lohrbench_rlds/",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi0_fast_base/params"
+        ),
+
+        # IMPORTANT: freeze_filter must match the model config you instantiate above
+        freeze_filter=pi0_fast.Pi0FASTConfig(
+            action_dim=8,
+            action_horizon=16,
+            max_token_len=180,
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+
+        # Common in their LoRA examples: turn off EMA
+        ema_decay=None,
+
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        num_train_steps=100_000,
+
+        # batch_size set below
+        batch_size=8,
+
+        log_interval=100,
+        save_interval=5000,
+        keep_period=10_000,
+        num_workers=0,
+    )
+
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
