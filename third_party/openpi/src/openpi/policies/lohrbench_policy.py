@@ -34,8 +34,6 @@ class LohrbenchInputs(transforms.DataTransformFn):
         state = np.concatenate([arm_qpos, grip_pos], axis=-1)
         
         # Make a writable copy of actions
-        actions = np.array(data["actions"], dtype=np.float32, copy=True)
-
         out = {
             "image": {
                 "primary": img,
@@ -46,9 +44,10 @@ class LohrbenchInputs(transforms.DataTransformFn):
                 "wrist": np.True_,
             },
             "state": state,
-            "actions": actions,
         }
-        
+        if "actions" in data:
+            actions = np.array(data["actions"], dtype=np.float32, copy=True)
+            out["actions"] = actions
         if "prompt" in data:
             prompt = data["prompt"]
             if isinstance(prompt, bytes):

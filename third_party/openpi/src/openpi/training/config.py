@@ -1017,46 +1017,55 @@ _CONFIGS = [
     *polaris_config.get_polaris_configs(),
     TrainConfig(
         name="pi0_lohrbench_rlds_finetune",
+        
+        # Model config with LoRA
         model=pi0_fast.Pi0FASTConfig(
             action_dim=8,
             action_horizon=16,
-            # keep max_token_len consistent with other pi0_fast configs unless you know you need bigger
-            max_token_len=180,
-            paligemma_variant="gemma_2b_lora",   # <-- LoRA
+            max_token_len=500,
+            paligemma_variant="gemma_2b_lora",  # Enable LoRA
         ),
+        
+        # Data config
         data=RLDSLohrbenchDataConfig(
             repo_id="lohrbench_rlds",
             rlds_data_dir="/home/haoran-zhang/data/Lohrbench_rlds/lohrbench_rlds/",
         ),
+        
+        # Load pretrained base model
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi0_fast_base/params"
         ),
-
-        # IMPORTANT: freeze_filter must match the model config you instantiate above
+        
+        # ✅ Use .get_freeze_filter() - this is the OpenPI way
         freeze_filter=pi0_fast.Pi0FASTConfig(
             action_dim=8,
             action_horizon=16,
-            max_token_len=180,
+            max_token_len=500,
             paligemma_variant="gemma_2b_lora",
         ).get_freeze_filter(),
-
-        # Common in their LoRA examples: turn off EMA
+        
+        # Turn off EMA for LoRA (standard)
         ema_decay=None,
-
+        
+        # 🔥 FIXED: Learning rate schedule
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=1_000,
-            peak_lr=5e-5,
-            decay_steps=1_000_000,
-            decay_lr=5e-5,
+            warmup_steps=2_000,
+            peak_lr=1e-4,              # ✅ 2x higher (was 5e-5)
+            decay_steps=100_000,       # ✅ Match num_train_steps! (was 1M)
+            decay_lr=1e-5,             # ✅ Actually decay (was 5e-5)
         ),
-        num_train_steps=100_000,
-
-        # batch_size set below
-        batch_size=8,
-
+        
+        # Training params
+        num_train_steps=100_0000,
+        batch_size=32,                 # ✅ 4x larger (was 8)
+        
+        # Logging
         log_interval=100,
         save_interval=5000,
         keep_period=10_000,
+        
+        # Required for RLDS
         num_workers=0,
     )
 
