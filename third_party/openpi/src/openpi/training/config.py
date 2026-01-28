@@ -1029,7 +1029,7 @@ _CONFIGS = [
         # Data config
         data=RLDSLohrbenchDataConfig(
             repo_id="lohrbench_rlds",
-            rlds_data_dir="/home/haoran-zhang/data/Lohrbench_rlds/lohrbench_rlds/",
+            rlds_data_dir="/data1/LoHRbench_rlds",
         ),
         
         # Load pretrained base model
@@ -1057,12 +1057,12 @@ _CONFIGS = [
         ),
         
         # Training params
-        num_train_steps=100_0000,
+        num_train_steps=300_0000,
         batch_size=32,                 # ✅ 4x larger (was 8)
         
         # Logging
         log_interval=100,
-        save_interval=5000,
+        save_interval=10000,
         keep_period=10_000,
         
         # Required for RLDS
