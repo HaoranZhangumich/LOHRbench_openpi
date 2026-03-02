@@ -17,6 +17,8 @@ LOHRbench_openpi/
 │       │   ├── models/
 │       │   │   ├── pi0_fast.py     # Pi0-FAST model config
 │       │   │   └── pi0_config.py   # Pi0 base config
+│       │   ├── policies/
+│       │   │   └── lohrbench_policy.py  # LoHRbench observation/action transforms
 │       │   └── training/
 │       │       ├── config.py       # Training configs (includes LoHRbench)
 │       │       ├── lohrbench_rlds_dataset.py  # RLDS data loader
@@ -27,18 +29,34 @@ LOHRbench_openpi/
 
 ## Setup
 
-Follow the OpenPI setup instructions:
+> **Note:** OpenPI requires Python >= 3.11. The base lohrbench conda environment uses Python 3.9, so you need a separate environment.
 
 ```bash
-cd third_party/openpi
+# 1. Create a new conda env with Python 3.11+
+conda create -n lohrbench_pi0 python=3.11 -y
+conda activate lohrbench_pi0
 
-# Install with uv (recommended)
-pip install uv
-uv sync
-
-# Or install with pip
+# 2. Install lohrbench from the parent repo
+cd /path/to/LoHRbench
 pip install -e .
+# Install lohrbench core dependencies (mani_skill, pddl, etc.) as needed
+
+# 3. Install uv (fast dependency resolver — pip alone hits resolution-too-deep)
+pip install uv
+
+# 4. Install OpenPI and missing runtime deps into the active conda env
+cd LOHRbench_openpi/third_party/openpi
+uv pip install -e .
+uv pip install chex==0.1.88 pytest  # required at import time but not in pyproject.toml
+
+# 5. (Optional) Install RLDS dependencies for training with RLDS data
+uv pip install tensorflow-cpu==2.15.0 tensorflow-datasets==4.9.9
+uv pip install "dlimp @ git+https://github.com/kvablack/dlimp@ad72ce3a9b414db2185bc0b38461d4101a65477a"
+# Fix ml-dtypes version conflict between tensorflow and jax
+uv pip install ml-dtypes==0.4.1
 ```
+
+We use `uv pip install -e .` (not `uv sync`) so that OpenPI is installed into the active conda env rather than creating a separate `.venv`. Plain `pip install -e .` will fail with a `resolution-too-deep` error due to the large dependency tree.
 
 ## Dataset
 
@@ -48,15 +66,17 @@ The HuggingFace dataset provides HDF5 files. Pi0 requires **RLDS format**, so yo
 
 ## Data Format
 
-Pi0 consumes data in **RLDS format** (TensorFlow Datasets). Convert the downloaded HDF5 trajectories to RLDS using the conversion script in [`TAMPBench/baseline/utils/data_convert.py`](../TAMPBench/baseline/utils/data_convert.py).
+Pi0 consumes data in **RLDS format** (TensorFlow Datasets). Convert the downloaded HDF5 trajectories to RLDS using the conversion script in [`baseline/utils/data_convert.py`](../baseline/utils/data_convert.py).
 
-Expected RLDS data directory:
+Expected RLDS data directory (configurable via `rlds_data_dir` in the training config):
 ```
 /data1/LoHRbench_rlds/
 └── lohrbench_rlds/
     └── 0.1.0/
         └── ...  (TFRecord files)
 ```
+
+> **Note:** The default `rlds_data_dir` in the training config is `/data1/LoHRbench_rlds`. If your data is at a different path, override it via the CLI: `--data.rlds_data_dir /your/path`.
 
 Each RLDS episode contains:
 - `observation/base_rgb`: base camera image (224x224x3, PNG-encoded)
